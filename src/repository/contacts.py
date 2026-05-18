@@ -3,12 +3,12 @@ from datetime import date, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from src.database.models import Contact
+from src.database.models import Contact, User
 from src.schemas.contact import ContactCreate, ContactUpdate
 
 
-def create_contact(body: ContactCreate, db: Session) -> Contact:
-    contact = Contact(**body.model_dump())
+def create_contact(body: ContactCreate, db: Session, user: User) -> Contact:
+    contact = Contact(**body.model_dump(), user_id=user.id)
     db.add(contact)
     db.commit()
     db.refresh(contact)
@@ -17,11 +17,12 @@ def create_contact(body: ContactCreate, db: Session) -> Contact:
 
 def get_contacts(
     db: Session,
+    user: User,
     first_name: str | None = None,
     last_name: str | None = None,
     email: str | None = None,
 ) -> list[Contact]:
-    stmt = select(Contact)
+    stmt = select(Contact).where(Contact.user_id == user.id)
     filters = []
 
     if first_name:
@@ -37,13 +38,13 @@ def get_contacts(
     return list(db.scalars(stmt).all())
 
 
-def get_contact(contact_id: int, db: Session) -> Contact | None:
-    stmt = select(Contact).where(Contact.id == contact_id)
+def get_contact(contact_id: int, db: Session, user: User) -> Contact | None:
+    stmt = select(Contact).where(Contact.id == contact_id, Contact.user_id == user.id)
     return db.scalar(stmt)
 
 
-def update_contact(contact_id: int, body: ContactUpdate, db: Session) -> Contact | None:
-    contact = get_contact(contact_id, db)
+def update_contact(contact_id: int, body: ContactUpdate, db: Session, user: User) -> Contact | None:
+    contact = get_contact(contact_id, db, user)
     if contact is None:
         return None
 
@@ -55,8 +56,8 @@ def update_contact(contact_id: int, body: ContactUpdate, db: Session) -> Contact
     return contact
 
 
-def delete_contact(contact_id: int, db: Session) -> Contact | None:
-    contact = get_contact(contact_id, db)
+def delete_contact(contact_id: int, db: Session, user: User) -> Contact | None:
+    contact = get_contact(contact_id, db, user)
     if contact is None:
         return None
 
@@ -65,10 +66,10 @@ def delete_contact(contact_id: int, db: Session) -> Contact | None:
     return contact
 
 
-def get_upcoming_birthdays(db: Session) -> list[Contact]:
+def get_upcoming_birthdays(db: Session, user: User) -> list[Contact]:
     today = date.today()
     end_date = today + timedelta(days=7)
-    contacts = list(db.scalars(select(Contact)).all())
+    contacts = list(db.scalars(select(Contact).where(Contact.user_id == user.id)).all())
     result: list[Contact] = []
 
     for contact in contacts:
