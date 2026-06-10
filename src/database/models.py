@@ -7,12 +7,15 @@ from src.database.db import Base
 
 
 class User(Base):
+    """Application user model."""
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     email: Mapped[str] = mapped_column(String(255), nullable=False, unique=True, index=True)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_confirmed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="user")
     avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -20,6 +23,8 @@ class User(Base):
 
 
 class Contact(Base):
+    """Contact model tied to a user owner."""
+
     __tablename__ = "contacts"
     __table_args__ = (UniqueConstraint("user_id", "email", name="uq_contacts_user_email"),)
 

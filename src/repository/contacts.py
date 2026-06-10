@@ -8,6 +8,8 @@ from src.schemas.contact import ContactCreate, ContactUpdate
 
 
 def create_contact(body: ContactCreate, db: Session, user: User) -> Contact:
+    """Create and persist a contact for the given user."""
+
     contact = Contact(**body.model_dump(), user_id=user.id)
     db.add(contact)
     db.commit()
@@ -22,6 +24,8 @@ def get_contacts(
     last_name: str | None = None,
     email: str | None = None,
 ) -> list[Contact]:
+    """Fetch user contacts with optional OR-based filters."""
+
     stmt = select(Contact).where(Contact.user_id == user.id)
     filters = []
 
@@ -39,11 +43,15 @@ def get_contacts(
 
 
 def get_contact(contact_id: int, db: Session, user: User) -> Contact | None:
+    """Fetch one contact by id for given owner."""
+
     stmt = select(Contact).where(Contact.id == contact_id, Contact.user_id == user.id)
     return db.scalar(stmt)
 
 
 def update_contact(contact_id: int, body: ContactUpdate, db: Session, user: User) -> Contact | None:
+    """Update a contact if it belongs to user."""
+
     contact = get_contact(contact_id, db, user)
     if contact is None:
         return None
@@ -57,6 +65,8 @@ def update_contact(contact_id: int, body: ContactUpdate, db: Session, user: User
 
 
 def delete_contact(contact_id: int, db: Session, user: User) -> Contact | None:
+    """Delete a contact by id for owner user."""
+
     contact = get_contact(contact_id, db, user)
     if contact is None:
         return None
@@ -67,6 +77,8 @@ def delete_contact(contact_id: int, db: Session, user: User) -> Contact | None:
 
 
 def get_upcoming_birthdays(db: Session, user: User) -> list[Contact]:
+    """Return contacts whose upcoming birthday is within 7 days."""
+
     today = date.today()
     end_date = today + timedelta(days=7)
     contacts = list(db.scalars(select(Contact).where(Contact.user_id == user.id)).all())
@@ -85,6 +97,8 @@ def get_upcoming_birthdays(db: Session, user: User) -> list[Contact]:
 
 
 def _safe_birthday(year: int, month: int, day: int) -> date:
+    """Handle February 29 for non-leap years."""
+
     if month == 2 and day == 29:
         try:
             return date(year, month, day)

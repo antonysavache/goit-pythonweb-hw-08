@@ -1,29 +1,22 @@
-# Homework 10 - Contacts REST API (Auth + JWT)
+# Homework 12 - Contacts REST API (Testing, Docs, Redis, Roles)
 
-REST API на `FastAPI + SQLAlchemy + PostgreSQL` з аутентифікацією, авторизацією та верифікацією email.
+## Implemented
 
-## Реалізовано
+- Authentication and JWT authorization (`access_token`)
+- Email verification and password reset flow
+- Role model (`user`, `admin`)
+- Access to contacts only for owner
+- `/users/me` rate limit (`5/minute`)
+- CORS support
+- Avatar upload to Cloudinary (admin-only)
+- Redis cache for `get_current_user`
+- Unit tests for repository modules
+- Integration tests for API routes
+- Sphinx documentation from docstrings
 
-- Реєстрація користувача: `POST /auth/register` (201, 409 якщо email вже існує)
-- Логін користувача: `POST /auth/login` (JWT `access_token`, 401 для невалідних даних)
-- Верифікація email:
-  - запит листа `POST /auth/request_email`
-  - підтвердження `GET /auth/confirmed_email/{token}`
-- Захист всіх контактів через JWT:
-  - `POST /contacts`
-  - `GET /contacts`
-  - `GET /contacts/{contact_id}`
-  - `PUT /contacts/{contact_id}`
-  - `DELETE /contacts/{contact_id}`
-  - `GET /contacts/upcoming/birthdays`
-- Користувач бачить тільки свої контакти
-- Маршрут профілю: `GET /users/me` з rate limit `5/minute`
-- Оновлення аватара через Cloudinary: `PATCH /users/avatar`
-- Увімкнено CORS (`CORS_ORIGINS`)
+## Environment variables
 
-## Змінні середовища
-
-Створіть `.env` з `.env.example` та заповніть:
+Use `.env` (see `.env.example`):
 
 - `DATABASE_URL`
 - `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_EXP_MINUTES`
@@ -31,13 +24,28 @@ REST API на `FastAPI + SQLAlchemy + PostgreSQL` з аутентифікацією, авторизацією 
 - `APP_BASE_URL`
 - SMTP: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`
 - Cloudinary: `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`
+- Redis: `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`, `REDIS_DB`, `REDIS_CACHE_TTL`
 
-## Запуск через Docker Compose
+## Run with Docker Compose
 
 ```bash
 docker compose up -d --build
 ```
 
-Swagger:
+API docs:
 
 - `http://127.0.0.1:8000/docs`
+
+## Tests and coverage
+
+```bash
+pytest
+```
+
+Coverage threshold is configured in `pytest.ini` and set to `75%`.
+
+## Build Sphinx docs
+
+```bash
+sphinx-build -b html docs docs/_build
+```

@@ -5,3 +5,10 @@ __pycache__/
 .ruff_cache/
 .venv/
 .env
+.coverage*
+coverage*
+*.db
+*.db-journal
+pytest-cache-files-*/
+docs/_build*/
+docs/_doctrees*/

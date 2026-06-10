@@ -24,27 +24,42 @@ from src.repository.contacts import (
     get_upcoming_birthdays,
     update_contact,
 )
-from src.repository.users import confirm_user_email, create_user, get_user_by_email, update_user_avatar
+from src.repository.users import (
+    confirm_user_email,
+    create_user,
+    get_user_by_email,
+    update_user_avatar,
+    update_user_password,
+)
 from src.schemas.contact import ContactCreate, ContactResponse, ContactUpdate
-from src.schemas.user import RequestEmail, Token, UserCreate, UserResponse
+from src.schemas.user import RequestEmail, ResetPassword, Token, UserCreate, UserResponse
 from src.services.auth import (
     create_access_token,
     create_email_token,
+    create_reset_token,
     decode_email_token,
+    decode_reset_token,
     decode_token,
     get_password_hash,
     verify_password,
 )
 from src.services.cloudinary_service import upload_avatar
-from src.services.email import send_verification_email
-
-Base.metadata.create_all(bind=engine)
+from src.services.email import send_password_reset_email, send_verification_email
+from src.services.redis_cache import cache
 
 limiter = Limiter(key_func=get_remote_address)
 app = FastAPI(title="Contacts API")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    """Initialize database schema on app startup."""
+
+    Base.metadata.create_all(bind=engine)
+
 
 origins = ["*"] if settings.cors_origins.strip() == "*" else [x.strip() for x in settings.cors_origins.split(",") if x.strip()]
 app.add_middleware(
@@ -60,22 +75,45 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login")
 
 @app.get("/")
 def read_root() -> dict[str, str]:
+    """Health-check endpoint."""
+
     return {"message": "Contacts API is running"}
 
 
+def _serialize_user(user: User) -> dict:
+    return {
+        "id": user.id,
+        "email": user.email,
+        "hashed_password": user.hashed_password,
+        "is_confirmed": user.is_confirmed,
+        "role": user.role,
+        "avatar_url": user.avatar_url,
+    }
+
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
+    """Resolve current user from JWT, with Redis cache-first strategy."""
+
     email = decode_token(token)
     if email is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
+    cached_user = cache.get_user(email)
+    if cached_user is not None:
+        return User(**cached_user)
+
     user = get_user_by_email(email, db)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+
+    cache.set_user(email, _serialize_user(user))
     return user
 
 
 @app.post("/auth/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 def register(body: UserCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> UserResponse:
+    """Register new user and send verification email."""
+
     existing_user = get_user_by_email(body.email, db)
     if existing_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account already exists")
@@ -88,17 +126,22 @@ def register(body: UserCreate, background_tasks: BackgroundTasks, db: Session = 
 
 @app.post("/auth/login", response_model=Token, status_code=status.HTTP_201_CREATED)
 def login(body: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)) -> Token:
+    """Authenticate user and return access token."""
+
     user = get_user_by_email(body.username, db)
     if user is None or not verify_password(body.password, user.hashed_password):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
     if not user.is_confirmed:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Email not confirmed")
 
+    cache.set_user(user.email, _serialize_user(user))
     return Token(access_token=create_access_token(user.email))
 
 
 @app.get("/auth/confirmed_email/{token}")
 def confirmed_email(token: str, db: Session = Depends(get_db)) -> dict[str, str]:
+    """Confirm email by verification token."""
+
     email = decode_email_token(token)
     if email is None:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification token")
@@ -110,11 +153,14 @@ def confirmed_email(token: str, db: Session = Depends(get_db)) -> dict[str, str]
         return {"message": "Your email is already confirmed"}
 
     confirm_user_email(email, db)
+    cache.delete_user(email)
     return {"message": "Email confirmed"}
 
 
 @app.post("/auth/request_email")
 def request_email(body: RequestEmail, background_tasks: BackgroundTasks, db: Session = Depends(get_db)) -> dict[str, str]:
+    """Request another email verification letter."""
+
     user = get_user_by_email(body.email, db)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
@@ -126,9 +172,43 @@ def request_email(body: RequestEmail, background_tasks: BackgroundTasks, db: Ses
     return {"message": "Check your email for confirmation"}
 
 
+@app.post("/auth/request_password_reset")
+def request_password_reset(
+    body: RequestEmail,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Send password reset email if user exists."""
+
+    user = get_user_by_email(body.email, db)
+    if user:
+        token = create_reset_token(user.email)
+        background_tasks.add_task(send_password_reset_email, user.email, token)
+
+    return {"message": "If that email exists, password reset instructions were sent"}
+
+
+@app.post("/auth/reset_password")
+def reset_password(body: ResetPassword, db: Session = Depends(get_db)) -> dict[str, str]:
+    """Set new password by valid reset token."""
+
+    email = decode_reset_token(body.token)
+    if email is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid reset token")
+
+    user = update_user_password(email, get_password_hash(body.new_password), db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    cache.delete_user(email)
+    return {"message": "Password updated"}
+
+
 @app.get("/users/me", response_model=UserResponse)
 @limiter.limit("5/minute")
 def me(request: Request, current_user: User = Depends(get_current_user)) -> UserResponse:
+    """Return authenticated user profile."""
+
     return current_user
 
 
@@ -138,6 +218,11 @@ def update_avatar(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> UserResponse:
+    """Update avatar for admin users only."""
+
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin can update avatar")
+
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
         tmp.write(file.file.read())
         tmp_path = tmp.name
@@ -153,6 +238,8 @@ def update_avatar(
     user = update_user_avatar(current_user.email, avatar_url, db)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    cache.delete_user(current_user.email)
     return user
 
 
@@ -162,6 +249,8 @@ def create_contact_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ContactResponse:
+    """Create contact for current user."""
+
     try:
         return create_contact(body, db, current_user)
     except IntegrityError:
@@ -177,6 +266,8 @@ def get_contacts_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ContactResponse]:
+    """List contacts for current user with optional filters."""
+
     return get_contacts(db, current_user, first_name, last_name, email)
 
 
@@ -186,6 +277,8 @@ def get_contact_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ContactResponse:
+    """Get one contact by id for current user."""
+
     contact = get_contact(contact_id, db, current_user)
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
@@ -199,6 +292,8 @@ def update_contact_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ContactResponse:
+    """Update contact owned by current user."""
+
     try:
         contact = update_contact(contact_id, body, db, current_user)
     except IntegrityError:
@@ -216,6 +311,8 @@ def delete_contact_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ContactResponse:
+    """Delete contact owned by current user."""
+
     contact = delete_contact(contact_id, db, current_user)
     if contact is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Contact not found")
@@ -227,4 +324,6 @@ def upcoming_birthdays_endpoint(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> list[ContactResponse]:
+    """Return contacts with birthdays in next 7 days."""
+
     return get_upcoming_birthdays(db, current_user)
