@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
+    admin_emails: str = ""
     redis_host: str = "localhost"
     redis_port: int = 6379
     redis_password: str = ""

@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
@@ -38,3 +40,9 @@ class ResetPassword(BaseModel):
 
     token: str
     new_password: str = Field(min_length=6, max_length=128)
+
+
+class UserRoleUpdate(BaseModel):
+    """Schema for admin-only role updates."""
+
+    role: Literal["user", "admin"]

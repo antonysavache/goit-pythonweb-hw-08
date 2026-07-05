@@ -30,9 +30,10 @@ from src.repository.users import (
     get_user_by_email,
     update_user_avatar,
     update_user_password,
+    update_user_role,
 )
 from src.schemas.contact import ContactCreate, ContactResponse, ContactUpdate
-from src.schemas.user import RequestEmail, ResetPassword, Token, UserCreate, UserResponse
+from src.schemas.user import RequestEmail, ResetPassword, Token, UserCreate, UserResponse, UserRoleUpdate
 from src.services.auth import (
     create_access_token,
     create_email_token,
@@ -48,7 +49,7 @@ from src.services.email import send_password_reset_email, send_verification_emai
 from src.services.redis_cache import cache
 
 limiter = Limiter(key_func=get_remote_address)
-app = FastAPI(title="Contacts API")
+app = FastAPI(title="Homework 12 Contacts API")
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
@@ -91,6 +92,12 @@ def _serialize_user(user: User) -> dict:
     }
 
 
+def _configured_admin_emails() -> set[str]:
+    """Return normalized emails that should receive admin role at registration."""
+
+    return {email.strip().lower() for email in settings.admin_emails.split(",") if email.strip()}
+
+
 def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     """Resolve current user from JWT, with Redis cache-first strategy."""
 
@@ -118,7 +125,8 @@ def register(body: UserCreate, background_tasks: BackgroundTasks, db: Session = 
     if existing_user:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Account already exists")
 
-    user = create_user(body.email, get_password_hash(body.password), db)
+    role = "admin" if body.email.lower() in _configured_admin_emails() else "user"
+    user = create_user(body.email, get_password_hash(body.password), db, role=role)
     verification_token = create_email_token(user.email)
     background_tasks.add_task(send_verification_email, user.email, verification_token)
     return user
@@ -210,6 +218,26 @@ def me(request: Request, current_user: User = Depends(get_current_user)) -> User
     """Return authenticated user profile."""
 
     return current_user
+
+
+@app.patch("/users/{user_id}/role", response_model=UserResponse)
+def update_user_role_endpoint(
+    user_id: int,
+    body: UserRoleUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> UserResponse:
+    """Update user role. Available only for admin users."""
+
+    if current_user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only admin can update user roles")
+
+    user = update_user_role(user_id, body.role, db)
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    cache.delete_user(user.email)
+    return user
 
 
 @app.patch("/users/avatar", response_model=UserResponse)

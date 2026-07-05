@@ -3,7 +3,7 @@ import sys
 
 sys.path.insert(0, os.path.abspath(".."))
 
-project = "Contacts API"
+project = "Homework 12 Contacts API"
 author = "GoIT HW"
 release = "1.0.0"
 

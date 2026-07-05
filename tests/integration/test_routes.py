@@ -1,5 +1,6 @@
 from datetime import date
 
+from src.config import settings
 from src.database.models import User
 from src.services.auth import create_reset_token
 
@@ -84,3 +85,32 @@ def test_avatar_forbidden_for_non_admin(client, db_session):
         files={"file": ("avatar.png", b"fake", "image/png")},
     )
     assert resp.status_code == 403
+
+
+def test_admin_bootstrap_and_role_assignment(client, db_session, monkeypatch):
+    monkeypatch.setattr(settings, "admin_emails", "admin@test.com")
+
+    admin_reg = _register(client, "admin@test.com")
+    user_reg = _register(client, "member@test.com")
+
+    assert admin_reg.status_code == 201
+    assert admin_reg.json()["role"] == "admin"
+    assert user_reg.status_code == 201
+    assert user_reg.json()["role"] == "user"
+
+    _confirm_user(db_session, "admin@test.com")
+    _confirm_user(db_session, "member@test.com")
+
+    member = db_session.query(User).filter(User.email == "member@test.com").first()
+    member_token = _login(client, "member@test.com").json()["access_token"]
+    member_headers = {"Authorization": f"Bearer {member_token}"}
+
+    forbidden = client.patch(f"/users/{member.id}/role", json={"role": "admin"}, headers=member_headers)
+    assert forbidden.status_code == 403
+
+    admin_token = _login(client, "admin@test.com").json()["access_token"]
+    admin_headers = {"Authorization": f"Bearer {admin_token}"}
+
+    promoted = client.patch(f"/users/{member.id}/role", json={"role": "admin"}, headers=admin_headers)
+    assert promoted.status_code == 200
+    assert promoted.json()["role"] == "admin"
